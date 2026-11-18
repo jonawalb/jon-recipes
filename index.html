@@ -179,6 +179,23 @@ nav.tabs .badge{position:absolute;top:2px;left:calc(50% + 8px);background:var(--
 .cook details{margin-top:22px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
 .cook details summary{font-weight:600;cursor:pointer}
 .cook .wl{font-size:12px;color:var(--muted)}
+.timerow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+.timerow div{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:8px 4px}
+.timerow strong{display:block;font-size:16px}
+.timerow span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.timenote{margin:-6px 0 0}
+.card .meta .fav{color:var(--chili)}
+.linkbtn{border:0;background:none;color:var(--herb);font:inherit;font-weight:600;padding:0 0 0 8px;cursor:pointer}
+.linkbtn:disabled{color:var(--muted)}
+.units{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:8px}
+.units button{border:0;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;padding:6px 12px}
+.units button[aria-pressed="true"]{background:var(--herb);color:var(--herb-ink)}
+.mynote{width:100%;font:inherit;font-size:15px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);padding:10px 12px;resize:vertical}
+.timerbtn{margin-top:12px}
+.timerbar{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 60px);z-index:60;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.timerbar[hidden]{display:none!important}
+.tpill{border:0;border-radius:999px;background:var(--turmeric);color:#1a1200;font-weight:700;font-size:15px;padding:8px 14px;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.tpill small{font-weight:500;opacity:.7;margin-left:4px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--nav-h) + 18px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;font-size:14px;font-weight:500;z-index:50;max-width:calc(100% - 32px)}
 .skel{height:108px;border-radius:var(--r);background:var(--sunk)}
 @media (prefers-reduced-motion:no-preference){.card,.match,.addbtn,.chip{transition:background .15s,border-color .15s,color .15s}}
@@ -288,6 +305,7 @@ nav.tabs .badge{position:absolute;top:2px;left:calc(50% + 8px);background:var(--
   <a href="#have" data-tab="have"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h16v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M4 10l2-5h12l2 5M10 14h4"/></svg>What I have</a>
 </div></nav>
 <div id="cook" class="cook" hidden></div>
+<div id="timerbar" class="timerbar" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 
 <script>
@@ -299,6 +317,7 @@ let R = [], byId = {}, canonFreq = [];
 const FILTERS = [
   ["all","All"],["Chicken","Chicken"],["Beef","Beef"],["Seafood","Seafood"],["Breakfast","Breakfast"],
   ["Batch Protein","Batch-cook proteins"],["Side","Sides"],["Snack & Dessert","Snacks & desserts"],["Drink","Smoothies & drinks"],
+  ["quick","30 min or less"],["fav","♥ Favorites"],["want","Want to try"],
   ["mp","Meal Prep book"],["jc","Jalal's book"]
 ];
 const AISLES = ["Meat & Seafood","Produce","Dairy & Eggs","Bread & Wraps","Pasta, Rice & Grains","Canned & Jarred","Sauces & Condiments","Spices & Seasonings","Baking","Frozen","Snacks & Other","Oils & Basics"];
@@ -306,7 +325,7 @@ const ui = { q: "", filter: "all", sort: "book", shown: 40 };
 
 /* ---------- saved state: localStorage now, synced through db when the viewer has it ---------- */
 const KEY = "jk-state-v1";
-let S = { plan: {}, scale: {}, checked: {}, have: [], spices: true, t: 0 };
+let S = { plan: {}, scale: {}, checked: {}, have: [], spices: true, fav: {}, want: {}, notes: {}, units: "book", t: 0 };
 try { const s = JSON.parse(localStorage.getItem(KEY) || "null"); if (s) S = Object.assign(S, s); } catch (e) {}
 let dbRef = null, writing = false, dirty = false, saveTimer = null;
 function save() {
@@ -334,7 +353,7 @@ async function flush() {
       if (snap.hasPendingWrites) return;
       const d = snap.exists ? snap.data() : null;
       if (d && (d.t || 0) > (S.t || 0)) {
-        S = Object.assign({ plan: {}, scale: {}, checked: {}, have: [], spices: true, t: 0 }, JSON.parse(JSON.stringify(d)));
+        S = Object.assign({ plan: {}, scale: {}, checked: {}, have: [], spices: true, fav: {}, want: {}, notes: {}, units: "book", t: 0 }, JSON.parse(JSON.stringify(d)));
         try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
         updateBadge(); if (!$("#cook").hidden) return; route();
       } else if ((!d && S.t) || (d && (S.t || 0) > (d.t || 0))) flush();
@@ -411,9 +430,11 @@ function perServing(text) {
   return /per serving|^\s*serve with/i.test(t);
 }
 function ingText(it, f) {
-  if (f === 1 || it.qty == null || perServing(it.text)) return esc(it.text);
+  const mode = S.units || "book";
+  if ((f === 1 && mode === "book") || it.qty == null || perServing(it.text)) return esc(it.text);
+  if (f === 1 && it.unit !== "g" && it.unit !== "ml" && it.unit !== "oz" && it.unit !== "lb" && it.unit !== "cup") return esc(it.text);
   const q = it.qty * f;
-  const amt = ["g", "ml", "tsp", "tbsp", "cup", "oz", "lb"].includes(it.unit) ? fmtQty(q, it.unit) : frac(q);
+  const amt = convert(q, it.unit, mode);
   const m = QTY_RE.exec(it.text);
   if (m && !m[0].includes("(")) {
     const vals = m[1].split(/\s*(?:[-–]|to|or|and)\s*/i).map(numVal);
@@ -422,6 +443,25 @@ function ingText(it, f) {
   }
   if (!m) return `<b class="amt">${esc(amt)}</b> · ${esc(it.text)}`;
   return esc(it.text.slice(0, m.index)) + `<b class="amt">${esc(amt)}</b> ` + esc(it.text.slice(m.index + m[0].length));
+}
+function fmtMin(m) {
+  if (m == null) return "";
+  if (m < 60) return m + " min";
+  const h = Math.floor(m / 60), r = m % 60;
+  return h + " hr" + (r ? " " + r + " min" : "");
+}
+/* units: "book" keeps the printed text, "metric" or "us" rewrites the amount */
+function convert(q, unit, mode) {
+  if (mode === "us") {
+    if (unit === "g") { const oz = q / 28.35; return oz >= 16 ? `${frac(oz / 16)} lb` : `${frac(oz)} oz`; }
+    if (unit === "ml") { if (q < 15) return `${frac(q / 4.93)} tsp`; if (q < 60) return `${frac(q / 14.8)} Tbsp`; const c = q / 240; return `${frac(c)} ${c > 1 ? "cups" : "cup"}`; }
+  }
+  if (mode === "metric") {
+    if (unit === "oz") return fmtQty(q * 28.35, "g");
+    if (unit === "lb") return fmtQty(q * 453.6, "g");
+    if (unit === "cup") return fmtQty(q * 240, "ml");
+  }
+  return ["g", "ml", "tsp", "tbsp", "cup", "oz", "lb"].includes(unit) ? fmtQty(q, unit) : frac(q);
 }
 const nonStaple = it => !it.staple && it.aisle !== "Oils & Basics";
 function needs(r, spicesOnHand) {
@@ -468,6 +508,9 @@ function filtered() {
     if (f === "jc" && r.book.startsWith("The Meal")) return false;
     if (["Chicken","Beef","Seafood"].includes(f) && r.protein !== f) return false;
     if (["Breakfast","Batch Protein","Side","Snack & Dessert","Drink"].includes(f) && r.meal !== f) return false;
+    if (f === "quick" && !(r.time && r.time.total <= 30)) return false;
+    if (f === "fav" && !S.fav[r.id]) return false;
+    if (f === "want" && !S.want[r.id]) return false;
     if (!words.length) return true;
     return words.every(w => r._hay.includes(w));
   });
@@ -476,13 +519,17 @@ function filtered() {
   if (ui.sort === "cal") out.sort((a, b) => (m(a,"cal") ?? 1e9) - (m(b,"cal") ?? 1e9));
   if (ui.sort === "ratio") out.sort((a, b) => ((m(b,"protein") ?? 0) / (m(b,"cal") || 1e9)) - ((m(a,"protein") ?? 0) / (m(a,"cal") || 1e9)));
   if (ui.sort === "az") out.sort((a, b) => a.title.localeCompare(b.title));
+  const tm = (r, k) => r.time ? r.time[k] : 1e9;
+  if (ui.sort === "total") out.sort((a, b) => tm(a, "total") - tm(b, "total"));
+  if (ui.sort === "prep") out.sort((a, b) => tm(a, "prep") - tm(b, "prep"));
+  if (ui.sort === "cook") out.sort((a, b) => tm(a, "cook") - tm(b, "cook"));
   return out;
 }
 function cardHTML(r) {
   const on = !!S.plan[r.id];
   return `<div class="card" data-open="${r.id}" role="link" tabindex="0">
     ${thumb(r)}
-    <div class="body"><h3>${esc(r.title)}</h3>${macroLine(r.macros)}<div class="meta">${esc(bookShort(r))}${r.servings ? ` · serves ${r.servings}` : ""}</div></div>
+    <div class="body"><h3>${esc(r.title)}</h3>${macroLine(r.macros)}<div class="meta">${S.fav[r.id] ? '<span class="fav">♥</span> ' : ""}${r.time ? `${fmtMin(r.time.total)} · ` : ""}${esc(bookShort(r))}${r.servings ? ` · serves ${r.servings}` : ""}</div></div>
     <button class="addbtn" data-plan="${r.id}" aria-pressed="${on}" aria-label="${on ? "Remove from" : "Add to"} grocery list">${on ? "✓" : "+"}</button>
   </div>`;
 }
@@ -494,9 +541,9 @@ function renderRecipes(keepFocus) {
       <label class="search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <input id="q" type="search" placeholder="Search recipes or ingredients" value="${esc(ui.q)}" autocomplete="off" aria-label="Search recipes"></label>
       <div class="chips" role="group" aria-label="Filter">${FILTERS.map(([k, l]) => `<button class="chip" data-filter="${k}" aria-pressed="${ui.filter === k}">${l}</button>`).join("")}</div>
-      <div class="sortrow"><span class="num">${rows.length} shown</span>
+      <div class="sortrow"><span class="num">${rows.length} shown <button class="linkbtn" id="surprise" ${rows.length ? "" : "disabled"}>🎲 Surprise me</button></span>
         <label>Sort <select id="sort" aria-label="Sort recipes">
-          ${[["book","Book order"],["protein","Most protein"],["cal","Fewest calories"],["ratio","Protein per calorie"],["az","A to Z"]].map(([k,l]) => `<option value="${k}" ${ui.sort===k?"selected":""}>${l}</option>`).join("")}
+          ${[["book","Book order"],["protein","Most protein"],["cal","Fewest calories"],["ratio","Protein per calorie"],["total","Quickest (total time)"],["prep","Shortest prep"],["cook","Shortest cook"],["az","A to Z"]].map(([k,l]) => `<option value="${k}" ${ui.sort===k?"selected":""}>${l}</option>`).join("")}
         </select></label></div>
     </div>`;
   const list = rows.length ? rows.slice(0, ui.shown).map(cardHTML).join("") : `<div class="empty">No recipes match “${esc(ui.q)}”. Try one ingredient, like “shrimp” or “potato”.</div>`;
@@ -531,17 +578,73 @@ function renderRecipe(id, keepScroll) {
       <div><strong>${m.carbs != null ? m.carbs + "g" : "–"}</strong><span>Carbs</span></div>
       <div><strong>${m.fat != null ? m.fat + "g" : "–"}</strong><span>Fat</span></div>
     </div>
+    ${r.time ? `<div class="timerow num"><div><strong>${fmtMin(r.time.prep)}</strong><span>Prep</span></div><div><strong>${fmtMin(r.time.cook)}</strong><span>Cook</span></div><div><strong>${fmtMin(r.time.total)}</strong><span>Total</span></div></div>
+    <p class="note timenote">Estimated times; the book doesn't print them.${r.time.passive ? ` Plus ${fmtMin(r.time.passive)} hands-off (marinating or chilling).` : ""}</p>` : ""}
     <div class="actions">
       <button class="btn" data-cook="${id}" ${r.steps.length ? "" : "disabled"}>Start cooking</button>
       <button class="btn ghost" data-plan="${id}" aria-pressed="${on}">${on ? "✓ On grocery list" : "+ Grocery list"}</button>
+      <button class="btn ghost small" data-fav="${id}" aria-pressed="${!!S.fav[id]}">${S.fav[id] ? "♥ Favorite" : "♡ Favorite"}</button>
+      <button class="btn ghost small" data-want="${id}" aria-pressed="${!!S.want[id]}">${S.want[id] ? "✓ Want to try" : "+ Want to try"}</button>
     </div>
     <section class="section"><h3>Ingredients <small>${m.cal != null ? "macros per serving" : ""}</small></h3>
+      <div class="units" role="group" aria-label="Units">${[["book","As printed"],["metric","Metric"],["us","US"]].map(([k, l]) => `<button data-units="${k}" aria-pressed="${(S.units || "book") === k}">${l}</button>`).join("")}</div>
       <div class="servrow"><span>Make ${servStepper(r)}</span><small>${f !== 1 ? `Book: ${esc(r.servings_text || (r.servings ? r.servings + " servings" : "1× recipe"))} · amounts scaled` : esc(r.servings_text || "")}</small></div>${groups}</section>
     <section class="section"><h3>Steps</h3>${r.steps.length ? `<ol class="steps">${r.steps.map(s => `<li><span>${esc(s)}</span></li>`).join("")}</ol>` : `<p class="note">The book lists ingredients only for this one, with no written steps.</p>`}</section>
     ${r.tips && r.tips.length ? `<section class="tips"><div class="label">Tips from the book</div><ul>${r.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></section>` : ""}
+    <section class="section"><h3>My notes <small>only you see these</small></h3>
+      <textarea class="mynote" id="mynote" data-note="${id}" rows="3" placeholder="e.g. used thighs instead, halve the chili">${esc((S.notes || {})[id] || "")}</textarea></section>
+    <div id="social"></div>
     <div class="source"><span>${esc(r.book)}, PDF page ${r.pages.join("–")}</span>${vids}</div>
   </article>`;
   if (!keepScroll) window.scrollTo(0, 0);
+  if (window.JRSocial) window.JRSocial.render(id, $("#social"));
+}
+
+/* ---------- timers ---------- */
+let timers = [], tickId = null, audio = null;
+function stepTimers(text) {
+  const out = [], seen = new Set();
+  const re = /(\d+(?:\.\d+)?)(?:\s*(?:-|–|to)\s*(\d+(?:\.\d+)?))?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const v = parseFloat(m[2] || m[1]), u = m[3].toLowerCase();
+    const sec = Math.round(v * (u.startsWith("h") ? 3600 : u.startsWith("s") ? 1 : 60));
+    if (!sec || sec > 6 * 3600 || seen.has(sec)) continue;
+    seen.add(sec);
+    out.push({ sec, label: u.startsWith("s") ? `${v} sec` : u.startsWith("h") ? fmtMin(Math.round(v * 60)) : `${v} min` });
+  }
+  return out;
+}
+function beep() {
+  try {
+    if (!audio) return;
+    const now = audio.currentTime;
+    for (let k = 0; k < 3; k++) {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(audio.destination);
+      g.gain.setValueAtTime(0.25, now + k * 0.4); g.gain.exponentialRampToValueAtTime(0.001, now + k * 0.4 + 0.3);
+      o.start(now + k * 0.4); o.stop(now + k * 0.4 + 0.32);
+    }
+  } catch (e) {}
+}
+function startTimer(sec, label) {
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
+  timers.push({ id: Date.now() + Math.random(), label, end: Date.now() + sec * 1000 });
+  if (!tickId) tickId = setInterval(tickTimers, 500);
+  tickTimers(); toast(`Timer started: ${label}`);
+}
+function tickTimers() {
+  const now = Date.now();
+  for (const t of timers.filter(t => t.end <= now)) {
+    beep(); try { navigator.vibrate && navigator.vibrate([300, 150, 300]); } catch (e) {}
+    toast(`⏱ ${t.label} timer is done`);
+  }
+  timers = timers.filter(t => t.end > now);
+  const bar = $("#timerbar");
+  bar.hidden = !timers.length;
+  bar.innerHTML = timers.map(t => { const s = Math.ceil((t.end - now) / 1000);
+    return `<button class="tpill num" data-canceltimer="${t.id}" aria-label="Cancel ${esc(t.label)} timer">⏱ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} <small>✕</small></button>`; }).join("");
+  if (!timers.length) { clearInterval(tickId); tickId = null; }
 }
 
 /* ---------- cook mode ---------- */
@@ -565,6 +668,7 @@ function drawCook() {
     <div class="stepno num">Step ${i + 1} of ${n}</div>
     <div class="progress">${r.steps.map((_, k) => `<i class="${k <= i ? "on" : ""}"></i>`).join("")}</div>
     <p class="steptext">${esc(r.steps[i])}</p>
+    ${stepTimers(r.steps[i]).map(t => `<button class="btn ghost small timerbtn" data-timer="${t.sec}" data-tlabel="${esc(t.label)}">⏱ Start ${esc(t.label)} timer</button>`).join("")}
     <details ${i === 0 ? "open" : ""}><summary>Ingredients · ${servLabel(r)}</summary>${ings}</details>
     ${i === n - 1 && r.tips && r.tips.length ? `<details open><summary>Tips</summary><ul style="padding-left:18px">${r.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></details>` : ""}
     <p class="wl">${wake ? "Screen stays on while cooking" : ""}</p>
@@ -598,7 +702,7 @@ function buildList() {
   return Object.values(agg);
 }
 function amtText(a) {
-  const parts = Object.entries(a.amt).map(([u, q]) => fmtQty(q, u === "count" ? "" : u));
+  const parts = Object.entries(a.amt).map(([u, q]) => u === "count" ? frac(q) : convert(q, u, S.units || "book"));
   if (a.loose && !parts.length) parts.push("as needed");
   return parts.join(" + ");
 }
@@ -699,7 +803,7 @@ function renderHave(keepFocus) {
 
 /* ---------- events ---------- */
 document.addEventListener("click", e => {
-  const t = e.target.closest("[data-plan],[data-open],[data-filter],[data-cook],[data-cookstep],[data-closecook],[data-back],[data-serv],[data-have],[data-unhave],#more");
+  const t = e.target.closest("[data-plan],[data-open],[data-filter],[data-cook],[data-cookstep],[data-closecook],[data-back],[data-serv],[data-have],[data-unhave],[data-fav],[data-want],[data-units],[data-timer],[data-canceltimer],#more,#surprise");
   if (!t) return;
   if (t.dataset.plan) { e.stopPropagation(); togglePlan(t.dataset.plan); route(); return; }
   if (t.dataset.open) { location.hash = "r-" + t.dataset.open; return; }
@@ -716,11 +820,27 @@ document.addEventListener("click", e => {
   if (t.dataset.have) { if (!S.have.includes(t.dataset.have)) S.have.push(t.dataset.have); save(); renderHave(); return; }
   if (t.dataset.unhave) { S.have = S.have.filter(x => x !== t.dataset.unhave); save(); renderHave(); return; }
   if (t.id === "more") { ui.shown += 40; renderRecipes(); return; }
+  if (t.id === "surprise") { const rows = filtered(); if (rows.length) location.hash = "r-" + rows[Math.floor(Math.random() * rows.length)].id; return; }
+  if (t.dataset.fav || t.dataset.want) {
+    const k = t.dataset.fav ? "fav" : "want", id = t.dataset.fav || t.dataset.want;
+    S[k] = S[k] || {}; if (S[k][id]) delete S[k][id]; else S[k][id] = Date.now();
+    save(); renderRecipe(id, true); return;
+  }
+  if (t.dataset.units) { S.units = t.dataset.units; save(); const h = location.hash; if (h.startsWith("#r-")) renderRecipe(h.slice(3), true); else route(); return; }
+  if (t.dataset.timer) { startTimer(+t.dataset.timer, t.dataset.tlabel); return; }
+  if (t.dataset.canceltimer) { timers = timers.filter(x => String(x.id) !== t.dataset.canceltimer); tickTimers(); return; }
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.matches("[data-open]")) location.hash = "r-" + e.target.dataset.open;
   if (cookState && (e.key === "ArrowRight" || e.key === "ArrowLeft")) { const b = $(`[data-cookstep="${e.key === "ArrowRight" ? 1 : -1}"]`); if (b && !b.disabled) b.click(); }
   if (cookState && e.key === "Escape") closeCook();
+});
+let noteTimer = null;
+document.addEventListener("input", e => {
+  const n = e.target.closest("[data-note]"); if (!n) return;
+  S.notes = S.notes || {};
+  if (n.value.trim()) S.notes[n.dataset.note] = n.value; else delete S.notes[n.dataset.note];
+  clearTimeout(noteTimer); noteTimer = setTimeout(save, 600);
 });
 document.addEventListener("change", e => {
   const c = e.target.closest("[data-check]");
